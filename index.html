@@ -234,6 +234,108 @@ const player = { x: 380, y: 540, w: 48, h: 28, speed: 280, shooting: false, invi
 let shootCooldown = 0;
 const SHOOT_DELAY = 0.25; // seconds
 
+// ============================================================
+// SOUND ENGINE — Web Audio API, fully synthesised (no files)
+// ============================================================
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new AudioCtx();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+// Unlock audio on first user gesture
+document.addEventListener('touchstart', ensureAudio, { once: true });
+document.addEventListener('keydown',    ensureAudio, { once: true });
+document.addEventListener('mousedown',  ensureAudio, { once: true });
+
+/** Generic envelope helper */
+function envelope(gainNode, now, attack, sustain, release, peak=1) {
+  gainNode.gain.setValueAtTime(0, now);
+  gainNode.gain.linearRampToValueAtTime(peak, now + attack);
+  gainNode.gain.setValueAtTime(peak, now + attack + sustain);
+  gainNode.gain.exponentialRampToValueAtTime(0.0001, now + attack + sustain + release);
+}
+
+/** Oscillator-based tone */
+function playTone(freq, type, attack, sustain, release, peak=0.25, freqEnd=null) {
+  if (!audioCtx) return;
+  const osc  = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.type = type;
+  const now = audioCtx.currentTime;
+  osc.frequency.setValueAtTime(freq, now);
+  if (freqEnd !== null) osc.frequency.exponentialRampToValueAtTime(freqEnd, now + attack + sustain + release);
+  envelope(gain, now, attack, sustain, release, peak);
+  osc.start(now);
+  osc.stop(now + attack + sustain + release + 0.05);
+}
+
+/** White-noise burst */
+function playNoise(duration, peak=0.3, filterFreq=2000) {
+  if (!audioCtx) return;
+  const bufLen = audioCtx.sampleRate * duration;
+  const buf    = audioCtx.createBuffer(1, bufLen, audioCtx.sampleRate);
+  const data   = buf.getChannelData(0);
+  for (let i = 0; i < bufLen; i++) data[i] = (Math.random() * 2 - 1);
+  const src    = audioCtx.createBufferSource();
+  src.buffer   = buf;
+  const filter = audioCtx.createBiquadFilter();
+  filter.type  = 'bandpass';
+  filter.frequency.value = filterFreq;
+  filter.Q.value = 0.8;
+  const gain = audioCtx.createGain();
+  src.connect(filter);
+  filter.connect(gain);
+  gain.connect(audioCtx.destination);
+  const now = audioCtx.currentTime;
+  gain.gain.setValueAtTime(peak, now);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+  src.start(now);
+  src.stop(now + duration + 0.05);
+}
+
+// ---- Named sound effects ----
+const SFX = {
+  shoot()      { playTone(880, 'square', 0.002, 0.02, 0.06, 0.18, 220); },
+  alienExplode(isBoss=false) {
+    playNoise(isBoss ? 0.7 : 0.25, isBoss ? 0.6 : 0.35, isBoss ? 400 : 900);
+    if (isBoss) playTone(80, 'sawtooth', 0.01, 0.1, 0.5, 0.5, 30);
+  },
+  playerHit()  {
+    playNoise(0.4, 0.5, 300);
+    playTone(120, 'sawtooth', 0.01, 0.05, 0.35, 0.4, 40);
+  },
+  powerup()    {
+    [523, 659, 784, 1047].forEach((f,i) =>
+      setTimeout(() => playTone(f, 'sine', 0.01, 0.04, 0.12, 0.22), i*60));
+  },
+  turretPlace() {
+    playTone(440, 'square', 0.005, 0.03, 0.1, 0.15);
+    setTimeout(() => playTone(660, 'square', 0.005, 0.03, 0.1, 0.15), 80);
+  },
+  shieldHit()  { playNoise(0.1, 0.2, 1500); },
+  waveStart()  {
+    [330, 392, 494, 660].forEach((f,i) =>
+      setTimeout(() => playTone(f, 'triangle', 0.01, 0.05, 0.15, 0.28), i*80));
+  },
+  gameOver()   {
+    [440, 370, 311, 220].forEach((f,i) =>
+      setTimeout(() => playTone(f, 'sawtooth', 0.02, 0.1, 0.3, 0.35), i*150));
+  },
+  alienShoot() { playTone(180, 'sawtooth', 0.005, 0.01, 0.08, 0.12, 90); },
+  streak()     {
+    [660, 880, 1100].forEach((f,i) =>
+      setTimeout(() => playTone(f, 'sine', 0.005, 0.02, 0.08, 0.3), i*50));
+  },
+  turretShoot(type=1) {
+    const freqs = [0, 660, 880, 1200];
+    playTone(freqs[type]||660, 'square', 0.002, 0.01, 0.04, 0.1);
+  },
+};
+
 // ---- MOBILE DETECTION ----
 const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
   ('ontouchstart' in window && navigator.maxTouchPoints > 0);
@@ -696,6 +798,7 @@ function tryPlaceTurret() {
   });
   spawnParticles(tx, ty, '#0f0', 12, 80);
   spawnTextParticle(tx, ty-20, 'TURRET PLACED!', '#0f0');
+  SFX.turretPlace();
   updateHUD();
 }
 
@@ -868,6 +971,7 @@ function loop(ts) {
     const delay = rapid ? SHOOT_DELAY * 0.3 : SHOOT_DELAY;
     playerBullets.push({ x: player.x, y: player.y-16, w: 4, h: 14, vy: -520 });
     shootCooldown = delay;
+    SFX.shoot();
   }
   if (player.invincible > 0) player.invincible -= dt;
   if (player.rapid > 0) player.rapid -= dt;
@@ -915,6 +1019,7 @@ function loop(ts) {
       const isBottomOfCol = a.isBoss || !aliveAliens.some(b => b !== a && Math.abs(b.x - a.x) < 20 && b.y > a.y && !b.dying);
       if (isBottomOfCol) {
         alienBullets.push({ x: a.x, y: a.y+16, w: 5, h: 12, vy: 400+wave*40, isBoss: a.isBoss });
+        SFX.alienShoot();
       }
     }
   });
@@ -943,6 +1048,7 @@ function loop(ts) {
         const speed = t.type === 3 ? 700 : 450;
         const mag = Math.hypot(dx, dy);
         playerBullets.push({ x: t.x, y: t.y-8, w: 3, h: 10, vx: (dx/mag)*speed, vy: (dy/mag)*speed, fromTurret: true, type: t.type });
+        SFX.turretShoot(t.type);
       }
     }
   });
@@ -972,10 +1078,12 @@ function loop(ts) {
           score += pts;
           streak++;
           streakTimer = 3;
+          SFX.alienExplode(a.isBoss);
           if (streak >= 5) {
             const bonus = pts * Math.floor(streak/5);
             score += bonus;
             spawnTextParticle(a.x, a.y-20, `${streak}x STREAK! +${bonus}`, '#ff0');
+            SFX.streak();
           } else {
             spawnTextParticle(a.x, a.y-20, `+${pts}`, atype.color);
           }
@@ -1001,6 +1109,7 @@ function loop(ts) {
         spawnParticles(player.x, player.y, '#f00', 20, 200);
         triggerShake(15, 0.5);
         triggerFlash('#f00', 0.4);
+        SFX.playerHit();
         updateHUD();
         streak = 0;
         if (lives <= 0) endGame();
@@ -1017,6 +1126,7 @@ function loop(ts) {
         b._hit = true;
         s.hp--;
         spawnParticles(b.x, b.y, '#0cf', 6, 60);
+        SFX.shieldHit();
       }
     });
   });
@@ -1041,6 +1151,7 @@ function loop(ts) {
       p.type.effect(player);
       spawnParticles(p.x, p.y, p.type.colour, 16, 120);
       spawnTextParticle(p.x, p.y-20, p.type.label, p.type.colour);
+      SFX.powerup();
       p._collected = true;
     }
   });
@@ -1058,6 +1169,7 @@ function loop(ts) {
   if (aliveAliens.length === 0 && !aliens.some(a => a.dying)) {
     wave++;
     spawnTextParticle(W/2, H/2, `WAVE ${wave}`, '#ff0');
+    SFX.waveStart();
     spawnWave(wave);
     turretsLeft += 1;
     updateHUD();
@@ -1227,6 +1339,7 @@ function loop(ts) {
 // ---- GAME OVER / NAME ENTRY ----
 let pendingName = '';
 function endGame() {
+  SFX.gameOver();
   state = 'namentry';
   const overlay = document.getElementById('overlay');
   overlay.style.display = 'flex';
