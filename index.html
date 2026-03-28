@@ -1,0 +1,1196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QUARK INVADERS</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Courier New', monospace;
+      overflow: hidden;
+    }
+    #gameWrapper {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    canvas {
+      display: block;
+      border: 2px solid #0ff;
+      box-shadow: 0 0 30px #0ff4, 0 0 60px #0ff2;
+      image-rendering: pixelated;
+    }
+    #hud {
+      width: 800px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 10px;
+      background: #000;
+      border: 2px solid #0ff;
+      border-bottom: none;
+      box-shadow: 0 0 20px #0ff4;
+    }
+    #hud span { color: #0ff; font-size: 14px; letter-spacing: 2px; }
+    #hud .lives { color: #f0f; }
+    #hud .wave  { color: #ff0; }
+    #hud .turrets { color: #0f0; }
+    #overlay {
+      position: absolute;
+      top: 0; left: 0;
+      width: 800px; height: 600px;
+      background: rgba(0,0,0,0.88);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #0ff;
+      z-index: 10;
+    }
+    #overlay h1 {
+      font-size: 52px;
+      letter-spacing: 6px;
+      text-shadow: 0 0 20px #0ff, 0 0 40px #0ff;
+      margin-bottom: 10px;
+      animation: pulse 1.5s infinite alternate;
+    }
+    #overlay h2 { font-size: 24px; color: #f0f; margin-bottom: 30px; letter-spacing: 3px; }
+    #overlay .instructions { font-size: 13px; color: #aaa; line-height: 2; text-align: center; margin-bottom: 24px; }
+    #overlay .instructions b { color: #0ff; }
+    #overlay button {
+      background: transparent;
+      border: 2px solid #0ff;
+      color: #0ff;
+      font-family: inherit;
+      font-size: 18px;
+      letter-spacing: 4px;
+      padding: 12px 40px;
+      cursor: pointer;
+      text-shadow: 0 0 10px #0ff;
+      box-shadow: 0 0 20px #0ff4;
+      transition: all 0.2s;
+    }
+    #overlay button:hover {
+      background: #0ff2;
+      box-shadow: 0 0 30px #0ff;
+      transform: scale(1.05);
+    }
+    #scoreTable { margin-top: 20px; text-align: center; }
+    #scoreTable h3 { color: #ff0; font-size: 16px; letter-spacing: 3px; margin-bottom: 8px; }
+    #scoreTable .entry { color: #aaa; font-size: 13px; line-height: 1.8; }
+    #scoreTable .entry .rank { color: #f0f; width: 30px; display: inline-block; }
+    #scoreTable .entry .name { color: #0ff; width: 120px; display: inline-block; }
+    #scoreTable .entry .pts  { color: #ff0; }
+    @keyframes pulse {
+      from { text-shadow: 0 0 20px #0ff, 0 0 40px #0ff; }
+      to   { text-shadow: 0 0 40px #0ff, 0 0 80px #0ff, 0 0 100px #0f8; }
+    }
+    #nameInput {
+      background: #000;
+      border: 1px solid #0ff;
+      color: #0ff;
+      font-family: inherit;
+      font-size: 18px;
+      letter-spacing: 3px;
+      padding: 8px 16px;
+      text-align: center;
+      margin-bottom: 16px;
+      outline: none;
+      text-transform: uppercase;
+      width: 200px;
+    }
+  </style>
+</head>
+<body>
+<div id="gameWrapper">
+  <div id="hud">
+    <span>SCORE: <span id="scoreDisplay">0</span></span>
+    <span class="wave">WAVE: <span id="waveDisplay">1</span></span>
+    <span class="turrets">TURRETS: <span id="turretsDisplay">3</span></span>
+    <span class="lives">LIVES: <span id="livesDisplay">❤️❤️❤️</span></span>
+  </div>
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+  <div id="overlay">
+    <h1>QUARK<br>INVADERS</h1>
+    <h2>SPACE INVADERS + TOWER DEFENCE</h2>
+    <div class="instructions">
+      <b>← →</b> Move &nbsp;|&nbsp; <b>SPACE</b> Shoot &nbsp;|&nbsp; <b>T</b> Place Turret (costs 500pts)<br>
+      <b>1-3</b> Choose turret type before placing<br>
+      Destroy aliens before they reach your base!<br>
+      Kill streaks earn bonus points. Collect power-ups!
+    </div>
+    <button id="startBtn">[ LAUNCH MISSION ]</button>
+    <div id="scoreTable">
+      <h3>— HIGH SCORES —</h3>
+      <div id="scoreEntries"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// QUARK INVADERS — a juicy Space Invaders + Tower Defence game
+// Design principles applied:
+//  • Screen shake on hits
+//  • Particle explosions with colour
+//  • Enemy juice: wobble, death animations, glow
+//  • Delta-time smooth movement
+//  • Progressive difficulty per wave
+//  • Tower defence: place turrets with T key
+//  • Power-ups drop from enemies
+//  • Kill-streak multiplier
+//  • Persistent high score table (localStorage)
+//  • Unique hand-drawn alien sprites (Canvas 2D API)
+// ============================================================
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const W = 800, H = 600;
+
+// ---- GLOBALS ----
+let state = 'menu'; // menu | playing | gameover | nameentry
+let score = 0, lives = 3, wave = 1;
+let turretsLeft = 3;
+let selectedTurretType = 1;
+let streak = 0, streakTimer = 0;
+let shakeX = 0, shakeY = 0, shakeDuration = 0;
+let flashAlpha = 0;
+let flashColour = '#fff';
+
+// ---- COLLECTIONS ----
+let aliens = [];
+let playerBullets = [];
+let alienBullets = [];
+let particles = [];
+let powerups = [];
+let turrets = [];
+let shields = [];
+let stars = [];
+
+// ---- PLAYER ----
+const player = { x: 380, y: 540, w: 48, h: 28, speed: 280, shooting: false, invincible: 0, rapid: 0 };
+let shootCooldown = 0;
+const SHOOT_DELAY = 0.25; // seconds
+
+// ---- INPUT ----
+const keys = {};
+document.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'KeyT' && state === 'playing') tryPlaceTurret();
+  if (e.code === 'Digit1') selectedTurretType = 1;
+  if (e.code === 'Digit2') selectedTurretType = 2;
+  if (e.code === 'Digit3') selectedTurretType = 3;
+  if (e.code === 'Space') e.preventDefault();
+});
+document.addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ---- STARS ----
+for (let i = 0; i < 120; i++) {
+  stars.push({ x: Math.random()*W, y: Math.random()*H, r: Math.random()*1.5+0.3, speed: Math.random()*20+5, bright: Math.random() });
+}
+
+// ---- HIGH SCORES ----
+function getScores() {
+  try { return JSON.parse(localStorage.getItem('quarkScores') || '[]'); } catch { return []; }
+}
+function saveScore(name, pts) {
+  const scores = getScores();
+  scores.push({ name: name.toUpperCase().substring(0,8), pts });
+  scores.sort((a,b) => b.pts - a.pts);
+  scores.splice(10);
+  localStorage.setItem('quarkScores', JSON.stringify(scores));
+}
+function renderScoreTable() {
+  const scores = getScores();
+  const el = document.getElementById('scoreEntries');
+  if (!scores.length) { el.innerHTML = '<div class="entry" style="color:#555">— no scores yet —</div>'; return; }
+  el.innerHTML = scores.slice(0,8).map((s,i) =>
+    `<div class="entry"><span class="rank">#${i+1}</span><span class="name">${s.name}</span><span class="pts">${s.pts.toLocaleString()}</span></div>`
+  ).join('');
+}
+
+// ---- ALIEN DESIGNS (5 unique types) ----
+// Each alien has a draw(ctx,x,y,t,phase) function
+const ALIEN_TYPES = [
+  // Type 0: The Blobfish — sad droopy face, tentacles
+  {
+    points: 50, w: 36, h: 30,
+    color: '#f8a', glow: '#f08',
+    draw(ctx, x, y, t, phase) {
+      const bob = Math.sin(t*2+phase)*2;
+      y += bob;
+      // body
+      ctx.beginPath();
+      ctx.ellipse(x, y-2, 16, 14, 0, 0, Math.PI*2);
+      ctx.fillStyle = '#e87';
+      ctx.fill();
+      // nose blob
+      ctx.beginPath();
+      ctx.ellipse(x, y+6, 8, 5, 0, 0, Math.PI*2);
+      ctx.fillStyle = '#f9a';
+      ctx.fill();
+      // eyes (sad droopy)
+      for (let ex of [-6, 6]) {
+        ctx.beginPath();
+        ctx.ellipse(x+ex, y-4, 4, 5, ex>0?0.3:-0.3, 0, Math.PI*2);
+        ctx.fillStyle = '#000';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(x+ex+1, y-5, 1.5, 1.5, 0, 0, Math.PI*2);
+        ctx.fillStyle = '#fff';
+        ctx.fill();
+      }
+      // tentacles
+      for (let i = 0; i < 4; i++) {
+        const tx = x - 15 + i*10;
+        ctx.beginPath();
+        ctx.moveTo(tx, y+8);
+        ctx.quadraticCurveTo(tx + Math.sin(t*3+i)*4, y+18, tx+Math.sin(t*2+i)*3, y+26);
+        ctx.strokeStyle = '#e87';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      // frown
+      ctx.beginPath();
+      ctx.arc(x, y+2, 5, 0.2, Math.PI-0.2);
+      ctx.strokeStyle = '#a55';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+  },
+  // Type 1: The Crab-Bot — mechanical claws, single big eye
+  {
+    points: 100, w: 42, h: 28,
+    color: '#0cf', glow: '#08f',
+    draw(ctx, x, y, t, phase) {
+      const clawAngle = Math.sin(t*4+phase)*0.4;
+      y += Math.sin(t*2+phase)*1.5;
+      // body hex
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = (i/6)*Math.PI*2 - Math.PI/6;
+        i===0 ? ctx.moveTo(x+Math.cos(a)*16, y+Math.sin(a)*11) : ctx.lineTo(x+Math.cos(a)*16, y+Math.sin(a)*11);
+      }
+      ctx.closePath();
+      ctx.fillStyle = '#135';
+      ctx.fill();
+      ctx.strokeStyle = '#0cf';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      // big eye
+      ctx.beginPath();
+      ctx.ellipse(x, y-1, 7, 7, 0, 0, Math.PI*2);
+      ctx.fillStyle = '#0cf';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(x, y-1, 4, 4, 0, 0, Math.PI*2);
+      ctx.fillStyle = '#000';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(x+2, y-3, 1.5, 1.5, 0, 0, Math.PI*2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+      // claws left
+      ctx.save();
+      ctx.translate(x-18, y+2);
+      ctx.rotate(-clawAngle);
+      ctx.fillStyle = '#0cf';
+      ctx.fillRect(-6, -3, 6, 6);
+      ctx.fillRect(-10, -5, 5, 4);
+      ctx.fillRect(-10, 2, 5, 4);
+      ctx.restore();
+      // claws right
+      ctx.save();
+      ctx.translate(x+18, y+2);
+      ctx.rotate(clawAngle);
+      ctx.fillStyle = '#0cf';
+      ctx.fillRect(0, -3, 6, 6);
+      ctx.fillRect(5, -5, 5, 4);
+      ctx.fillRect(5, 2, 5, 4);
+      ctx.restore();
+      // legs
+      for (let i = 0; i < 3; i++) {
+        const ly = y + 6 + i*4;
+        const lx1 = x - 14, lx2 = x + 14;
+        const wiggle = Math.sin(t*6+i+phase)*3;
+        ctx.beginPath();
+        ctx.moveTo(lx1, ly); ctx.lineTo(lx1-8+wiggle, ly+8);
+        ctx.strokeStyle = '#0cf'; ctx.lineWidth = 1.5; ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(lx2, ly); ctx.lineTo(lx2+8-wiggle, ly+8);
+        ctx.stroke();
+      }
+    }
+  },
+  // Type 2: The Jellycopter — jellyfish with helicopter blades
+  {
+    points: 150, w: 38, h: 32,
+    color: '#f0f', glow: '#80f',
+    draw(ctx, x, y, t, phase) {
+      y += Math.sin(t*1.5+phase)*3;
+      const spin = t*8 + phase;
+      // blade
+      for (let b = 0; b < 2; b++) {
+        const ba = spin + b*Math.PI;
+        ctx.beginPath();
+        ctx.ellipse(x + Math.cos(ba)*14, y-14 + Math.sin(ba)*4, 14, 4, ba, 0, Math.PI*2);
+        ctx.fillStyle = 'rgba(255,0,255,0.6)';
+        ctx.fill();
+      }
+      // bell
+      ctx.beginPath();
+      ctx.arc(x, y, 14, Math.PI, 0);
+      ctx.lineTo(x+14, y+8);
+      ctx.quadraticCurveTo(x, y+18, x-14, y+8);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(180,0,220,0.8)';
+      ctx.fill();
+      ctx.strokeStyle = '#f0f';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      // inner bell shimmer
+      ctx.beginPath();
+      ctx.arc(x, y, 9, Math.PI, 0);
+      ctx.fillStyle = 'rgba(255,100,255,0.3)';
+      ctx.fill();
+      // eyes
+      for (let ex of [-5, 5]) {
+        ctx.beginPath();
+        ctx.ellipse(x+ex, y-2, 3, 4, 0, 0, Math.PI*2);
+        ctx.fillStyle = '#fff';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(x+ex, y-1, 1.5, 2, 0, 0, Math.PI*2);
+        ctx.fillStyle = '#309';
+        ctx.fill();
+      }
+      // tentacles
+      for (let i = 0; i < 5; i++) {
+        const tx = x - 12 + i*6;
+        ctx.beginPath();
+        ctx.moveTo(tx, y+14);
+        for (let s = 0; s < 4; s++) {
+          ctx.lineTo(tx + Math.sin(t*4+s*1.2+i)*5, y+14+s*5+5);
+        }
+        ctx.strokeStyle = `hsl(${280+i*15},100%,70%)`;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+    }
+  },
+  // Type 3: The Grumpy Cube — angry blocky alien with arms
+  {
+    points: 200, w: 34, h: 30,
+    color: '#0f8', glow: '#0a4',
+    draw(ctx, x, y, t, phase) {
+      y += Math.sin(t*3+phase)*1;
+      const anger = Math.abs(Math.sin(t*2+phase));
+      // body
+      ctx.fillStyle = '#0a4';
+      ctx.fillRect(x-14, y-13, 28, 26);
+      ctx.strokeStyle = '#0f8';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x-14, y-13, 28, 26);
+      // pixel detail
+      ctx.fillStyle = '#0f8';
+      ctx.fillRect(x-14, y-13, 5, 3);
+      ctx.fillRect(x+9, y-13, 5, 3);
+      ctx.fillRect(x-14, y+10, 5, 3);
+      ctx.fillRect(x+9, y+10, 5, 3);
+      // eyes (angry)
+      for (let ex of [-5, 5]) {
+        ctx.fillStyle = '#f44';
+        ctx.fillRect(x+ex-4, y-7+anger*2, 8, 7);
+        // angry eyebrow
+        ctx.beginPath();
+        ctx.moveTo(x+ex-4, y-8+anger*2);
+        ctx.lineTo(x+ex+4, y-8-anger*3);
+        ctx.strokeStyle = '#f00';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        // pupil
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(x+ex-1, y-5+anger*2, 3, 3);
+      }
+      // mouth (grumpy frown)
+      ctx.fillStyle = '#0f8';
+      ctx.fillRect(x-6, y+5, 12, 3);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(x-4, y+5, 2, 2);
+      ctx.fillRect(x, y+5, 2, 2);
+      ctx.fillRect(x+3, y+5, 2, 2);
+      // arms
+      const armWave = Math.sin(t*4+phase)*6;
+      ctx.fillStyle = '#0a4';
+      ctx.strokeStyle = '#0f8';
+      ctx.lineWidth = 2;
+      // left arm
+      ctx.beginPath();
+      ctx.moveTo(x-14, y); ctx.lineTo(x-22, y-armWave); ctx.lineTo(x-26, y-armWave+4);
+      ctx.stroke();
+      // right arm
+      ctx.beginPath();
+      ctx.moveTo(x+14, y); ctx.lineTo(x+22, y+armWave); ctx.lineTo(x+26, y+armWave-4);
+      ctx.stroke();
+    }
+  },
+  // Type 4: BOSS — The Eye of Malevolence (appears on wave 5+)
+  {
+    points: 1000, w: 60, h: 50, isBoss: true,
+    color: '#f80', glow: '#f40',
+    draw(ctx, x, y, t, phase) {
+      y += Math.sin(t*0.8+phase)*5;
+      const pulse = (Math.sin(t*2)+1)/2;
+      // outer ring
+      ctx.beginPath();
+      ctx.arc(x, y, 26+pulse*3, 0, Math.PI*2);
+      ctx.strokeStyle = `rgba(255,${100+pulse*100},0,0.8)`;
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      // shell
+      for (let i = 0; i < 8; i++) {
+        const a = (i/8)*Math.PI*2 + t*0.5;
+        const r = 20;
+        ctx.beginPath();
+        ctx.arc(x+Math.cos(a)*r, y+Math.sin(a)*r, 5, 0, Math.PI*2);
+        ctx.fillStyle = `hsl(${20+i*10},100%,40%)`;
+        ctx.fill();
+      }
+      // main eyeball
+      ctx.beginPath();
+      ctx.arc(x, y, 18, 0, Math.PI*2);
+      ctx.fillStyle = '#800';
+      ctx.fill();
+      ctx.strokeStyle = '#f80';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // iris
+      ctx.beginPath();
+      ctx.arc(x, y, 11, 0, Math.PI*2);
+      ctx.fillStyle = `hsl(${30+pulse*20},100%,45%)`;
+      ctx.fill();
+      // pupil (tracks slowly)
+      const px = Math.cos(t*0.7)*4;
+      const py = Math.sin(t*0.9)*3;
+      ctx.beginPath();
+      ctx.arc(x+px, y+py, 6, 0, Math.PI*2);
+      ctx.fillStyle = '#000';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(x+px+2, y+py-2, 2, 0, Math.PI*2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+      // teeth
+      for (let i = 0; i < 5; i++) {
+        const a = (i/5)*Math.PI + Math.PI/10;
+        ctx.beginPath();
+        ctx.moveTo(x+Math.cos(a)*18, y+Math.sin(a)*18);
+        ctx.lineTo(x+Math.cos(a)*26, y+Math.sin(a)*26);
+        ctx.strokeStyle = '#ff0';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    }
+  }
+];
+
+// ---- SPAWN WAVE ----
+function spawnWave(waveNum) {
+  aliens = [];
+  shields = [];
+  turrets = turrets.filter(t => t.permanent);
+
+  // Shields (player defence structures)
+  for (let i = 0; i < 4; i++) {
+    shields.push({ x: 80 + i * 200, y: 490, hp: 3, maxHp: 3, w: 60, h: 18 });
+  }
+
+  // Alien grid
+  const rows = Math.min(3 + Math.floor(waveNum/2), 6);
+  const cols = Math.min(8 + Math.floor(waveNum/3), 12);
+  const typePool = waveNum < 3 ? [0,1] : waveNum < 5 ? [0,1,2,3] : [0,1,2,3];
+  const speedMult = 1 + (waveNum-1)*0.12;
+
+  let startX = 60, startY = 70, gapX = 56, gapY = 52;
+  // Shrink gap if many cols
+  if (cols > 9) gapX = Math.max(44, Math.floor((W - 120) / cols));
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const typeIdx = typePool[Math.floor(r / 2) % typePool.length];
+      aliens.push({
+        type: typeIdx,
+        x: startX + c * gapX,
+        y: startY + r * gapY,
+        hp: 1 + Math.floor(waveNum/3),
+        maxHp: 1 + Math.floor(waveNum/3),
+        baseX: startX + c * gapX,
+        phase: Math.random() * Math.PI * 2,
+        shootTimer: Math.random() * 4,
+        dying: false, dyingTimer: 0,
+        speedMult
+      });
+    }
+  }
+
+  // Boss every 5th wave
+  if (waveNum % 5 === 0) {
+    aliens.push({
+      type: 4,
+      x: W/2, y: 120,
+      hp: 15 + waveNum*2, maxHp: 15 + waveNum*2,
+      baseX: W/2, phase: 0,
+      shootTimer: 1,
+      dying: false, dyingTimer: 0,
+      speedMult, isBoss: true
+    });
+  }
+}
+
+// ---- PARTICLE SYSTEM ----
+function spawnParticles(x, y, colour, count=16, speed=150) {
+  for (let i = 0; i < count; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const v = (Math.random() * 0.5 + 0.5) * speed;
+    particles.push({
+      x, y,
+      vx: Math.cos(a) * v, vy: Math.sin(a) * v,
+      life: 1, maxLife: Math.random() * 0.5 + 0.4,
+      r: Math.random() * 3 + 1,
+      colour, glow: true
+    });
+  }
+}
+function spawnTextParticle(x, y, text, colour='#ff0') {
+  particles.push({ x, y, vx: 0, vy: -60, life: 1, maxLife: 1.2, text, colour, isText: true, r: 0 });
+}
+
+// ---- SCREEN SHAKE ----
+function triggerShake(intensity=8, duration=0.3) {
+  shakeX = (Math.random()-0.5)*intensity*2;
+  shakeY = (Math.random()-0.5)*intensity*2;
+  shakeDuration = duration;
+}
+function triggerFlash(colour='#fff', alpha=0.3) {
+  flashColour = colour;
+  flashAlpha = alpha;
+}
+
+// ---- TURRET PLACEMENT ----
+function tryPlaceTurret() {
+  if (turretsLeft <= 0) { spawnTextParticle(player.x, player.y-30, 'NO TURRETS!', '#f00'); return; }
+  if (score < 500 && turrets.filter(t=>!t.permanent).length > 0) {
+    spawnTextParticle(player.x, player.y-30, 'NEED 500 PTS', '#f80'); return;
+  }
+  // Place turret above player
+  const ty = player.y - 60;
+  const tx = player.x;
+  // Check not overlapping existing
+  const overlap = turrets.some(t => Math.abs(t.x-tx) < 40 && Math.abs(t.y-ty) < 30);
+  if (overlap) { spawnTextParticle(tx, ty-20, 'BLOCKED!', '#f00'); return; }
+  score = Math.max(0, score - 500);
+  turretsLeft--;
+  turrets.push({
+    x: tx, y: ty, type: selectedTurretType,
+    shootTimer: 0, hp: 3, maxHp: 3,
+    permanent: false
+  });
+  spawnParticles(tx, ty, '#0f0', 12, 80);
+  spawnTextParticle(tx, ty-20, 'TURRET PLACED!', '#0f0');
+  updateHUD();
+}
+
+// ---- POWER-UPS ----
+const POWERUP_TYPES = [
+  { label: '★ RAPID', colour: '#ff0', effect: p => { p.rapid = 5; } },
+  { label: '★ SHIELD', colour: '#0cf', effect: p => { p.invincible = 5; } },
+  { label: '★ +LIFE', colour: '#f0f', effect: () => { if (lives < 5) { lives++; updateHUD(); } } },
+  { label: '★ TURRET', colour: '#0f0', effect: () => { turretsLeft++; updateHUD(); } },
+];
+function spawnPowerup(x, y) {
+  if (Math.random() > 0.15) return;
+  const t = POWERUP_TYPES[Math.floor(Math.random()*POWERUP_TYPES.length)];
+  powerups.push({ x, y, vy: 60, type: t, life: 8, w: 70, h: 18 });
+}
+
+// ---- DRAW PLAYER ----
+function drawPlayer(x, y, t) {
+  const inv = player.invincible > 0;
+  if (inv && Math.floor(t*10)%2===0) return; // blink when invincible
+  ctx.save();
+  // engine glow
+  const grd = ctx.createRadialGradient(x, y+14, 2, x, y+14, 20);
+  grd.addColorStop(0, 'rgba(0,200,255,0.8)');
+  grd.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = grd;
+  ctx.beginPath(); ctx.arc(x, y+14, 20, 0, Math.PI*2); ctx.fill();
+
+  // body
+  ctx.fillStyle = inv ? '#0ff' : '#d0f8ff';
+  ctx.beginPath();
+  ctx.moveTo(x, y-14);
+  ctx.lineTo(x+18, y+14);
+  ctx.lineTo(x+8, y+10);
+  ctx.lineTo(x, y+14);
+  ctx.lineTo(x-8, y+10);
+  ctx.lineTo(x-18, y+14);
+  ctx.closePath();
+  ctx.fill();
+  // cockpit
+  ctx.beginPath();
+  ctx.ellipse(x, y-2, 6, 10, 0, 0, Math.PI*2);
+  ctx.fillStyle = '#0cf';
+  ctx.fill();
+  // wings accent
+  ctx.fillStyle = '#0af';
+  ctx.beginPath();
+  ctx.moveTo(x-6, y+2); ctx.lineTo(x-18, y+14); ctx.lineTo(x-8, y+10); ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(x+6, y+2); ctx.lineTo(x+18, y+14); ctx.lineTo(x+8, y+10); ctx.closePath();
+  ctx.fill();
+
+  // Turret type indicator
+  const tc = ['#fff','#ff0','#0f0','#f0f'][selectedTurretType] || '#fff';
+  ctx.fillStyle = tc;
+  ctx.font = '10px Courier New';
+  ctx.textAlign = 'center';
+  ctx.fillText(`T${selectedTurretType}`, x, y+28);
+  ctx.restore();
+}
+
+// ---- DRAW TURRET ----
+function drawTurret(t, time) {
+  ctx.save();
+  ctx.translate(t.x, t.y);
+  const hp_ratio = t.hp / t.maxHp;
+  const colours = ['#fff','#ff0','#0f0','#f0f'];
+  const col = colours[t.type] || '#fff';
+  // base
+  ctx.fillStyle = '#333';
+  ctx.fillRect(-14, -8, 28, 16);
+  ctx.strokeStyle = col;
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(-14, -8, 28, 16);
+  // barrel
+  ctx.fillStyle = col;
+  ctx.fillRect(-3, -18, 6, 14);
+  // HP bar
+  ctx.fillStyle = '#300'; ctx.fillRect(-14, 10, 28, 4);
+  ctx.fillStyle = hp_ratio > 0.5 ? '#0f0' : '#f80';
+  ctx.fillRect(-14, 10, 28*hp_ratio, 4);
+  ctx.restore();
+}
+
+// ---- DRAW SHIELD ----
+function drawShield(s) {
+  const hp = s.hp / s.maxHp;
+  ctx.fillStyle = `rgba(0,${Math.floor(hp*200)},${Math.floor(hp*255)},0.7)`;
+  ctx.fillRect(s.x - s.w/2, s.y - s.h/2, s.w, s.h);
+  ctx.strokeStyle = `rgba(0,200,255,${hp})`;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(s.x - s.w/2, s.y - s.h/2, s.w, s.h);
+  // damage cracks
+  if (s.hp < s.maxHp) {
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < s.maxHp - s.hp; i++) {
+      ctx.beginPath();
+      ctx.moveTo(s.x - 20 + i*14, s.y-5);
+      ctx.lineTo(s.x - 15 + i*14, s.y+5);
+      ctx.stroke();
+    }
+  }
+}
+
+// ---- HUD UPDATE ----
+function updateHUD() {
+  document.getElementById('scoreDisplay').textContent = score.toLocaleString();
+  document.getElementById('waveDisplay').textContent = wave;
+  document.getElementById('turretsDisplay').textContent = turretsLeft;
+  const hearts = '❤️'.repeat(Math.max(0,lives)) + '🖤'.repeat(Math.max(0,3-lives));
+  document.getElementById('livesDisplay').textContent = hearts;
+}
+
+// ---- MAIN GAME LOOP ----
+let lastTime = 0, gameTime = 0;
+
+function loop(ts) {
+  const dt = Math.min((ts - lastTime) / 1000, 0.05);
+  lastTime = ts;
+  if (state === 'playing') gameTime += dt;
+
+  // --- CLEAR ---
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  // --- STARS ---
+  stars.forEach(s => {
+    s.y += s.speed * dt;
+    if (s.y > H) s.y = 0;
+    const twinkle = 0.5 + s.bright * 0.5 * (0.7 + 0.3 * Math.sin(gameTime*3+s.x));
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.r, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(255,255,255,${twinkle})`;
+    ctx.fill();
+  });
+
+  if (state !== 'playing') {
+    requestAnimationFrame(loop);
+    return;
+  }
+
+  // --- APPLY SCREEN SHAKE ---
+  if (shakeDuration > 0) {
+    shakeDuration -= dt;
+    shakeX = (Math.random()-0.5)*8*(shakeDuration/0.3);
+    shakeY = (Math.random()-0.5)*8*(shakeDuration/0.3);
+    ctx.save();
+    ctx.translate(shakeX, shakeY);
+  }
+
+  // --- PLAYER MOVEMENT ---
+  if (keys['ArrowLeft'] || keys['KeyA']) player.x -= player.speed * dt;
+  if (keys['ArrowRight'] || keys['KeyD']) player.x += player.speed * dt;
+  player.x = Math.max(24, Math.min(W-24, player.x));
+
+  // --- PLAYER SHOOT ---
+  shootCooldown -= dt;
+  const rapid = player.rapid > 0;
+  if ((keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && shootCooldown <= 0) {
+    const delay = rapid ? SHOOT_DELAY * 0.3 : SHOOT_DELAY;
+    if (shootCooldown <= 0) {
+      playerBullets.push({ x: player.x, y: player.y-16, w: 4, h: 14, vy: -520 });
+      shootCooldown = delay;
+    }
+  }
+  if (player.invincible > 0) player.invincible -= dt;
+  if (player.rapid > 0) player.rapid -= dt;
+
+  // --- ALIEN MOVEMENT ---
+  const aliveAliens = aliens.filter(a => !a.dying);
+  const bossAlive = aliveAliens.some(a => a.isBoss);
+  // Group march
+  const marchPeriod = Math.max(0.5, 3 - (wave * 0.15));
+  const marchAmp = 30;
+  const marchOffset = Math.sin(gameTime / marchPeriod) * marchAmp;
+  const dropRate = 28 + wave * 2;
+  // Move aliens left/right as group
+  let groupDir = Math.sign(Math.cos(gameTime / marchPeriod));
+  const rightmost = aliveAliens.reduce((m, a) => Math.max(m, a.x), 0);
+  const leftmost  = aliveAliens.reduce((m, a) => Math.min(m, a.x), W);
+
+  // Find if we need to reverse
+  if (rightmost > W - 30 || leftmost < 30) {
+    // nudge all down
+    if (!aliens._lastDrop || gameTime - aliens._lastDrop > 0.5) {
+      aliveAliens.forEach(a => { a.y += dropRate * dt * 4; });
+      aliens._lastDrop = gameTime;
+    }
+  } else {
+    aliveAliens.forEach(a => {
+      a.x = a.baseX + marchOffset;
+    });
+  }
+
+  // Boss special movement
+  if (bossAlive) {
+    const boss = aliveAliens.find(a => a.isBoss);
+    boss.x = W/2 + Math.sin(gameTime*0.7)*200;
+    boss.y = 100 + Math.sin(gameTime*0.4)*40;
+  }
+
+  // --- ALIEN SHOOTING ---
+  aliveAliens.forEach(a => {
+    a.shootTimer -= dt;
+    const shootRate = Math.max(0.4, (a.isBoss ? 0.8 : 2.5) - wave*0.08);
+    if (a.shootTimer <= 0) {
+      a.shootTimer = shootRate + Math.random() * shootRate;
+      // Only bottom row or boss shoots
+      const isBottomOfCol = a.isBoss || !aliveAliens.some(b => b !== a && Math.abs(b.x - a.x) < 20 && b.y > a.y && !b.dying);
+      if (isBottomOfCol) {
+        alienBullets.push({ x: a.x, y: a.y+16, w: 5, h: 12, vy: 200+wave*20, isBoss: a.isBoss });
+      }
+    }
+  });
+
+  // --- DYING ALIENS ---
+  aliens.filter(a => a.dying).forEach(a => {
+    a.dyingTimer += dt;
+    if (a.dyingTimer > 0.5) a._remove = true;
+  });
+  aliens = aliens.filter(a => !a._remove);
+
+  // --- TURRET AUTO-SHOOT ---
+  turrets.forEach(t => {
+    t.shootTimer -= dt;
+    const shootRate = t.type === 3 ? 0.3 : t.type === 2 ? 0.6 : 1.0;
+    if (t.shootTimer <= 0 && aliveAliens.length > 0) {
+      t.shootTimer = shootRate;
+      // Aim at closest alien
+      let closest = null, minD = Infinity;
+      aliveAliens.forEach(a => {
+        const d = Math.hypot(a.x-t.x, a.y-t.y);
+        if (d < minD) { minD = d; closest = a; }
+      });
+      if (closest) {
+        const dx = closest.x - t.x, dy = closest.y - t.y;
+        const speed = t.type === 3 ? 700 : 450;
+        const mag = Math.hypot(dx, dy);
+        playerBullets.push({ x: t.x, y: t.y-8, w: 3, h: 10, vx: (dx/mag)*speed, vy: (dy/mag)*speed, fromTurret: true, type: t.type });
+      }
+    }
+  });
+
+  // --- UPDATE BULLETS ---
+  playerBullets.forEach(b => {
+    b.y += (b.vy || -520) * dt;
+    if (b.vx) b.x += b.vx * dt;
+  });
+  alienBullets.forEach(b => { b.y += b.vy * dt; });
+  playerBullets = playerBullets.filter(b => b.y > -20 && b.y < H+20 && b.x > -20 && b.x < W+20);
+  alienBullets  = alienBullets.filter(b => b.y < H+20);
+
+  // --- COLLISION: PLAYER BULLETS vs ALIENS ---
+  playerBullets.forEach(b => {
+    if (b._hit) return;
+    aliveAliens.forEach(a => {
+      if (a.dying) return;
+      const atype = ALIEN_TYPES[a.type];
+      if (Math.abs(b.x - a.x) < atype.w/2 && Math.abs(b.y - a.y) < atype.h/2) {
+        b._hit = true;
+        a.hp--;
+        spawnParticles(b.x, b.y, atype.color, 8, 100);
+        if (a.hp <= 0) {
+          a.dying = true; a.dyingTimer = 0;
+          const pts = atype.points * wave;
+          score += pts;
+          streak++;
+          streakTimer = 3;
+          if (streak >= 5) {
+            const bonus = pts * Math.floor(streak/5);
+            score += bonus;
+            spawnTextParticle(a.x, a.y-20, `${streak}x STREAK! +${bonus}`, '#ff0');
+          } else {
+            spawnTextParticle(a.x, a.y-20, `+${pts}`, atype.color);
+          }
+          spawnParticles(a.x, a.y, atype.color, 24, 200);
+          spawnPowerup(a.x, a.y);
+          triggerShake(a.isBoss ? 12 : 5, 0.2);
+          triggerFlash(atype.color, 0.1);
+          updateHUD();
+        }
+      }
+    });
+  });
+  playerBullets = playerBullets.filter(b => !b._hit);
+
+  // --- COLLISION: ALIEN BULLETS vs PLAYER ---
+  if (player.invincible <= 0) {
+    alienBullets.forEach(b => {
+      if (b._hit) return;
+      if (Math.abs(b.x-player.x) < 18 && Math.abs(b.y-player.y) < 14) {
+        b._hit = true;
+        lives--;
+        player.invincible = 2.5;
+        spawnParticles(player.x, player.y, '#f00', 20, 200);
+        triggerShake(15, 0.5);
+        triggerFlash('#f00', 0.4);
+        updateHUD();
+        streak = 0;
+        if (lives <= 0) endGame();
+      }
+    });
+    alienBullets = alienBullets.filter(b => !b._hit);
+  }
+
+  // --- COLLISION: ALIEN BULLETS vs SHIELDS ---
+  alienBullets.forEach(b => {
+    shields.forEach(s => {
+      if (s.hp <= 0) return;
+      if (Math.abs(b.x - s.x) < s.w/2 && Math.abs(b.y - s.y) < s.h/2) {
+        b._hit = true;
+        s.hp--;
+        spawnParticles(b.x, b.y, '#0cf', 6, 60);
+      }
+    });
+  });
+  alienBullets = alienBullets.filter(b => !b._hit);
+
+  // --- COLLISION: ALIEN BULLETS vs TURRETS ---
+  alienBullets.forEach(b => {
+    turrets.forEach(t => {
+      if (Math.abs(b.x-t.x) < 14 && Math.abs(b.y-t.y) < 10) {
+        b._hit = true; t.hp--;
+        if (t.hp <= 0) { t._remove = true; spawnParticles(t.x, t.y, '#f80', 16, 150); }
+      }
+    });
+  });
+  turrets = turrets.filter(t => !t._remove);
+
+  // --- POWER-UPS ---
+  powerups.forEach(p => {
+    p.y += p.vy * dt;
+    p.life -= dt;
+    if (Math.abs(p.x-player.x) < p.w/2+10 && Math.abs(p.y-player.y) < p.h/2+10) {
+      p.type.effect(player);
+      spawnParticles(p.x, p.y, p.type.colour, 16, 120);
+      spawnTextParticle(p.x, p.y-20, p.type.label, p.type.colour);
+      p._collected = true;
+    }
+  });
+  powerups = powerups.filter(p => !p._collected && p.life > 0 && p.y < H+40);
+
+  // --- STREAK TIMER ---
+  if (streakTimer > 0) { streakTimer -= dt; if (streakTimer <= 0) streak = 0; }
+
+  // --- ALIENS REACH BOTTOM ---
+  if (aliveAliens.some(a => a.y > 500)) {
+    endGame();
+  }
+
+  // --- NEXT WAVE ---
+  if (aliveAliens.length === 0 && !aliens.some(a => a.dying)) {
+    wave++;
+    spawnTextParticle(W/2, H/2, `WAVE ${wave}`, '#ff0');
+    spawnWave(wave);
+    turretsLeft += 1;
+    updateHUD();
+  }
+
+  // ============ DRAW PHASE ============
+
+  // Shields
+  shields.filter(s => s.hp > 0).forEach(drawShield);
+
+  // Turrets
+  turrets.forEach(t => drawTurret(t, gameTime));
+
+  // Aliens
+  ctx.save();
+  aliens.forEach(a => {
+    const atype = ALIEN_TYPES[a.type];
+    ctx.save();
+    if (a.dying) {
+      ctx.globalAlpha = Math.max(0, 1 - a.dyingTimer/0.5);
+      ctx.translate(a.x, a.y);
+      ctx.rotate(a.dyingTimer * 8);
+      ctx.scale(1 + a.dyingTimer*2, 1 + a.dyingTimer*2);
+      ctx.translate(-a.x, -a.y);
+    }
+    // Glow
+    ctx.save();
+    ctx.shadowColor = atype.glow;
+    ctx.shadowBlur = 12;
+    atype.draw(ctx, a.x, a.y, gameTime, a.phase);
+    ctx.restore();
+    // HP bar (if multi-hp)
+    if (!a.dying && a.maxHp > 1) {
+      const bw = atype.w;
+      ctx.fillStyle = '#300'; ctx.fillRect(a.x-bw/2, a.y-atype.h/2-8, bw, 4);
+      ctx.fillStyle = '#f00'; ctx.fillRect(a.x-bw/2, a.y-atype.h/2-8, bw*(a.hp/a.maxHp), 4);
+    }
+    ctx.restore();
+  });
+  ctx.restore();
+
+  // Alien bullets
+  alienBullets.forEach(b => {
+    ctx.save();
+    ctx.shadowColor = b.isBoss ? '#f00' : '#f80';
+    ctx.shadowBlur = 8;
+    ctx.fillStyle = b.isBoss ? '#f44' : '#f80';
+    ctx.beginPath();
+    ctx.ellipse(b.x, b.y, b.w/2, b.h/2, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  });
+
+  // Player
+  drawPlayer(player.x, player.y, gameTime);
+
+  // Player bullets
+  playerBullets.forEach(b => {
+    ctx.save();
+    const col = b.fromTurret ? ['#fff','#ff0','#0f0','#f0f'][b.type]||'#fff' : '#0ff';
+    ctx.shadowColor = col; ctx.shadowBlur = 10;
+    ctx.fillStyle = col;
+    ctx.fillRect(b.x - b.w/2, b.y - b.h/2, b.w, b.h);
+    ctx.restore();
+  });
+
+  // Particles
+  particles.forEach(p => {
+    p.life -= dt / p.maxLife;
+    if (p.isText) {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, p.life);
+      ctx.fillStyle = p.colour;
+      ctx.font = 'bold 13px Courier New';
+      ctx.textAlign = 'center';
+      ctx.shadowColor = p.colour;
+      ctx.shadowBlur = 8;
+      ctx.fillText(p.text, p.x, p.y);
+      ctx.restore();
+    } else {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vy += 80 * dt; // gravity
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, p.life);
+      ctx.shadowColor = p.colour; ctx.shadowBlur = 6;
+      ctx.fillStyle = p.colour;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * Math.max(0, p.life), 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    }
+  });
+  particles = particles.filter(p => p.life > 0);
+
+  // Power-ups
+  powerups.forEach(p => {
+    const alpha = Math.min(1, p.life * 0.8);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.type.colour;
+    ctx.shadowColor = p.type.colour; ctx.shadowBlur = 12;
+    ctx.fillRect(p.x - p.w/2, p.y - p.h/2, p.w, p.h);
+    ctx.font = 'bold 11px Courier New';
+    ctx.fillStyle = '#000';
+    ctx.textAlign = 'center';
+    ctx.shadowBlur = 0;
+    ctx.fillText(p.type.label, p.x, p.y+4);
+    ctx.restore();
+  });
+
+  // Streak display
+  if (streak >= 3) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, streakTimer);
+    ctx.fillStyle = '#ff0';
+    ctx.shadowColor = '#ff0'; ctx.shadowBlur = 15;
+    ctx.font = `bold ${14+streak}px Courier New`;
+    ctx.textAlign = 'right';
+    ctx.fillText(`${streak}x STREAK`, W-10, 30);
+    ctx.restore();
+  }
+
+  // Power-up indicator
+  if (player.rapid > 0) {
+    ctx.fillStyle = '#ff0';
+    ctx.font = '12px Courier New';
+    ctx.textAlign = 'left';
+    ctx.fillText(`⚡ RAPID ${player.rapid.toFixed(1)}s`, 10, H-10);
+  }
+  if (player.invincible > 0) {
+    ctx.fillStyle = '#0cf';
+    ctx.font = '12px Courier New';
+    ctx.textAlign = 'left';
+    ctx.fillText(`🛡 SHIELD ${player.invincible.toFixed(1)}s`, 10, H-25);
+  }
+
+  // Turret type selector (bottom right)
+  ctx.fillStyle = '#555';
+  ctx.font = '11px Courier New';
+  ctx.textAlign = 'right';
+  ctx.fillText('TURRET TYPE: [1]BASIC [2]RAPID [3]SNIPER', W-10, H-10);
+
+  // Screen flash
+  if (flashAlpha > 0) {
+    flashAlpha -= dt * 3;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, flashAlpha);
+    ctx.fillStyle = flashColour;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+
+  // Restore shake transform
+  if (shakeDuration > 0 || shakeX !== 0) {
+    ctx.restore();
+    if (shakeDuration <= 0) { shakeX = 0; shakeY = 0; }
+  }
+
+  requestAnimationFrame(loop);
+}
+
+// ---- GAME OVER / NAME ENTRY ----
+let pendingName = '';
+function endGame() {
+  state = 'namentry';
+  const overlay = document.getElementById('overlay');
+  overlay.style.display = 'flex';
+  overlay.innerHTML = `
+    <h1 style="font-size:36px">GAME OVER</h1>
+    <h2>FINAL SCORE: ${score.toLocaleString()}</h2>
+    <p style="color:#aaa;margin-bottom:16px;font-size:13px">WAVE ${wave} REACHED</p>
+    <p style="color:#0ff;margin-bottom:8px;letter-spacing:2px">ENTER YOUR NAME:</p>
+    <input id="nameInput" class="nameInput" maxlength="8" placeholder="PILOT" autofocus style="background:#000;border:1px solid #0ff;color:#0ff;font-family:inherit;font-size:18px;letter-spacing:3px;padding:8px 16px;text-align:center;margin-bottom:16px;outline:none;text-transform:uppercase;width:200px;" />
+    <button id="saveBtn" style="background:transparent;border:2px solid #0ff;color:#0ff;font-family:inherit;font-size:16px;letter-spacing:3px;padding:10px 30px;cursor:pointer;">[ SAVE SCORE ]</button>
+  `;
+  overlay.querySelector('#saveBtn').addEventListener('click', () => {
+    const name = overlay.querySelector('#nameInput').value.trim() || 'PILOT';
+    saveScore(name, score);
+    showMenu();
+  });
+  overlay.querySelector('#nameInput').addEventListener('keydown', e => {
+    if (e.code === 'Enter') overlay.querySelector('#saveBtn').click();
+  });
+}
+
+function showMenu() {
+  state = 'menu';
+  renderScoreTable();
+  const overlay = document.getElementById('overlay');
+  overlay.innerHTML = `
+    <h1>QUARK<br>INVADERS</h1>
+    <h2>SPACE INVADERS + TOWER DEFENCE</h2>
+    <div class="instructions">
+      <b>← →</b> Move &nbsp;|&nbsp; <b>SPACE</b> Shoot &nbsp;|&nbsp; <b>T</b> Place Turret (costs 500pts)<br>
+      <b>1</b> Basic Turret &nbsp;<b>2</b> Rapid Turret &nbsp;<b>3</b> Sniper Turret<br>
+      Kill streaks multiply your bonus. Collect power-ups!<br>
+      A new boss arrives every 5 waves...
+    </div>
+    <button id="startBtn">[ LAUNCH MISSION ]</button>
+    <div id="scoreTable">
+      <h3>— HIGH SCORES —</h3>
+      <div id="scoreEntries"></div>
+    </div>
+  `;
+  renderScoreTable();
+  overlay.querySelector('#startBtn').addEventListener('click', startGame);
+  overlay.style.display = 'flex';
+}
+
+function startGame() {
+  score = 0; lives = 3; wave = 1; turretsLeft = 3;
+  streak = 0; streakTimer = 0; gameTime = 0;
+  aliens = []; playerBullets = []; alienBullets = [];
+  particles = []; powerups = []; turrets = [];
+  player.x = W/2; player.y = 540;
+  player.invincible = 0; player.rapid = 0;
+  selectedTurretType = 1;
+  spawnWave(1);
+  updateHUD();
+  document.getElementById('overlay').style.display = 'none';
+  state = 'playing';
+}
+
+// ---- INIT ----
+document.getElementById('startBtn').addEventListener('click', startGame);
+renderScoreTable();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
